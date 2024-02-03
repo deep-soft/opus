@@ -46,13 +46,17 @@
 #  define MAY_HAVE_SSE4_1(name) name ## _c
 # endif
 
-# if defined(OPUS_X86_MAY_HAVE_AVX)
-#  define MAY_HAVE_AVX(name) name ## _avx
+# if defined(OPUS_X86_MAY_HAVE_AVX2)
+#  define MAY_HAVE_AVX2(name) name ## _avx2
 # else
-#  define MAY_HAVE_AVX(name) name ## _c
+#  define MAY_HAVE_AVX2(name) name ## _c
 # endif
 
-# if defined(OPUS_HAVE_RTCD)
+# if defined(OPUS_HAVE_RTCD) && \
+  ((defined(OPUS_X86_MAY_HAVE_SSE) && !defined(OPUS_X86_PRESUME_SSE)) || \
+  (defined(OPUS_X86_MAY_HAVE_SSE2) && !defined(OPUS_X86_PRESUME_SSE2)) || \
+  (defined(OPUS_X86_MAY_HAVE_SSE4_1) && !defined(OPUS_X86_PRESUME_SSE4_1)) || \
+  (defined(OPUS_X86_MAY_HAVE_AVX2) && !defined(OPUS_X86_PRESUME_AVX2)))
 int opus_select_arch(void);
 # endif
 
@@ -68,6 +72,6 @@ int opus_select_arch(void);
  (_mm_cvtepi8_epi32(_mm_cvtsi32_si128(OP_LOADU_EPI32(x))))
 
 #define OP_CVTEPI16_EPI32_M64(x) \
- (_mm_cvtepi16_epi32(_mm_loadl_epi64((__m128i *)(x))))
+ (_mm_cvtepi16_epi32(_mm_loadl_epi64((__m128i *)(void*)(x))))
 
 #endif

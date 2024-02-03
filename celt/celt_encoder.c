@@ -281,6 +281,9 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
       /* High-pass filter: (1 - 2*z^-1 + z^-2) / (1 - z^-1 + .5*z^-2) */
       for (i=0;i<len;i++)
       {
+#ifndef FIXED_POINT
+         float mem00;
+#endif
          opus_val32 x,y;
          x = SHR32(in[i+c*len],SIG_SHIFT);
          y = ADD32(mem0, x);
@@ -288,8 +291,13 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
          mem0 = mem1 + y - SHL32(x,1);
          mem1 = x - SHR32(y,1);
 #else
+         /* Original code:
          mem0 = mem1 + y - 2*x;
          mem1 = x - .5f*y;
+         Modified code to shorten dependency chains: */
+         mem00=mem0;
+         mem0 = mem0 - x + .5f*mem1;
+         mem1 =  x - mem00;
 #endif
          tmp[i] = SROUND16(y, 2);
          /*printf("%f ", tmp[i]);*/
@@ -322,10 +330,11 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
 #ifdef FIXED_POINT
          /* FIXME: Use PSHR16() instead */
          tmp[i] = mem0 + PSHR32(x2-mem0,forward_shift);
-#else
-         tmp[i] = mem0 + MULT16_16_P15(forward_decay,x2-mem0);
-#endif
          mem0 = tmp[i];
+#else
+         mem0 = x2 + (1.f-forward_decay)*mem0;
+         tmp[i] = forward_decay*mem0;
+#endif
       }
 
       mem0=0;
@@ -337,11 +346,13 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
 #ifdef FIXED_POINT
          /* FIXME: Use PSHR16() instead */
          tmp[i] = mem0 + PSHR32(tmp[i]-mem0,3);
-#else
-         tmp[i] = mem0 + MULT16_16_P15(QCONST16(0.125f,15),tmp[i]-mem0);
-#endif
          mem0 = tmp[i];
          maxE = MAX16(maxE, mem0);
+#else
+         mem0 = tmp[i] + 0.875f*mem0;
+         tmp[i] = 0.125f*mem0;
+         maxE = MAX16(maxE, 0.125f*mem0);
+#endif
       }
       /*for (i=0;i<len2;i++)printf("%f ", tmp[i]/mean);printf("\n");*/
 
@@ -1565,10 +1576,13 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_val16 * pcm, 
       vbr_rate = 0;
       tmp = st->bitrate*frame_size;
       if (tell>1)
-         tmp += tell;
+         tmp += tell*mode->Fs;
       if (st->bitrate!=OPUS_BITRATE_MAX)
+      {
          nbCompressedBytes = IMAX(2, IMIN(nbCompressedBytes,
                (tmp+4*mode->Fs)/(8*mode->Fs)-!!st->signalling));
+         ec_enc_shrink(enc, nbCompressedBytes);
+      }
       effectiveBytes = nbCompressedBytes - nbFilledBytes;
    }
    equiv_rate = ((opus_int32)nbCompressedBytes*8*50 << (3-LM)) - (40*C+20)*((400>>LM) - 50);
@@ -2246,7 +2260,7 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_val16 * pcm, 
       if (anti_collapse_on)
       {
          anti_collapse(mode, X, collapse_masks, LM, C, N,
-               start, end, oldBandE, oldLogE, oldLogE2, pulses, st->rng);
+               start, end, oldBandE, oldLogE, oldLogE2, pulses, st->rng, st->arch);
       }
 
       c=0; do {
@@ -2265,15 +2279,15 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_val16 * pcm, 
          st->prefilter_period_old=IMAX(st->prefilter_period_old, COMBFILTER_MINPERIOD);
          comb_filter(out_mem[c], out_mem[c], st->prefilter_period_old, st->prefilter_period, mode->shortMdctSize,
                st->prefilter_gain_old, st->prefilter_gain, st->prefilter_tapset_old, st->prefilter_tapset,
-               mode->window, overlap);
+               mode->window, overlap, st->arch);
          if (LM!=0)
             comb_filter(out_mem[c]+mode->shortMdctSize, out_mem[c]+mode->shortMdctSize, st->prefilter_period, pitch_index, N-mode->shortMdctSize,
                   st->prefilter_gain, gain1, st->prefilter_tapset, prefilter_tapset,
-                  mode->window, overlap);
+                  mode->window, overlap, st->arch);
       } while (++c<CC);
 
       /* We reuse freq[] as scratch space for the de-emphasis */
-      deemphasis(out_mem, (opus_val16*)pcm, N, CC, st->upsample, mode->preemph, st->preemph_memD);
+      deemphasis(out_mem, (opus_val16*)pcm, N, CC, st->upsample, mode->preemph, st->preemph_memD, 0);
       st->prefilter_period_old = st->prefilter_period;
       st->prefilter_gain_old = st->prefilter_gain;
       st->prefilter_tapset_old = st->prefilter_tapset;
